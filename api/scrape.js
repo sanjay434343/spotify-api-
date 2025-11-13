@@ -1,71 +1,58 @@
 import fetch from "node-fetch";
-import dotenv from "dotenv";
 
-dotenv.config();
+export default async function handler(req, res) {
+  const playlistId = req.query.playlist;
 
-// load from .env
-const clientId = process.env.CLIENT_ID;
-const clientSecret = process.env.CLIENT_SECRET;
-
-async function getToken() {
-  const creds = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-
-  const res = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST",
-    headers: {
-      "Authorization": `Basic ${creds}`,
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    body: "grant_type=client_credentials"
-  });
-
-  const data = await res.json();
-
-  if (data.error) {
-    console.log("TOKEN ERROR:", data);
+  if (!playlistId) {
+    return res.status(400).json({ error: "Playlist ID is required" });
   }
 
-  return data.access_token;
-}
+  const clientId = process.env.CLIENT_ID;
+  const clientSecret = process.env.CLIENT_SECRET;
 
-async function getPlaylistTracks(playlistId) {
-  const token = await getToken();
+  if (!clientId || !clientSecret) {
+    return res.status(500).json({ error: "Missing CLIENT_ID or CLIENT_SECRET" });
+  }
 
-  const res = await fetch(
+  // Get Spotify API token
+  const tokenRes = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: {
+      "Authorization":
+        "Basic " + Buffer.from(`${clientId}:${clientSecret}`).toString("base64"),
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: "grant_type=client_credentials",
+  });
+
+  const tokenData = await tokenRes.json();
+  const token = tokenData.access_token;
+
+  if (!token) {
+    return res.status(500).json({ error: "Failed to create token", details: tokenData });
+  }
+
+  // Fetch playlist tracks
+  const playlistRes = await fetch(
     `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`,
     {
-      headers: { "Authorization": `Bearer ${token}` }
+      headers: { Authorization: `Bearer ${token}` },
     }
   );
 
-  const data = await res.json();
+  const playlistData = await playlistRes.json();
 
-  if (data.error) {
-    console.log("SPOTIFY ERROR:", data);
-    return [];
+  if (playlistData.error) {
+    return res.status(500).json({ error: playlistData.error });
   }
 
-  return data.items.map(item => {
-    const t = item.track;
-    return {
-      title: t.name,
-      artists: t.artists.map(a => a.name).join(", "),
-      album: t.album.name,
-      image: t.album.images[0]?.url,
-      preview: t.preview_url
-    };
-  });
+  const tracks = playlistData.items.map((item) => ({
+    title: item.track.name,
+    artists: item.track.artists.map((a) => a.name).join(", "),
+    album: item.track.album.name,
+    image: item.track.album.images[0]?.url,
+    preview: item.track.preview_url,
+  }));
+
+  return res.status(200).json({ total: tracks.length, tracks });
 }
-
-// ---------------------------
-// RUN
-// ---------------------------
-
-const playlistUrl = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M";
-// extract only the playlist ID
-const playlistId = playlistUrl.split("playlist/")[1].split("?")[0];
-
-getPlaylistTracks(playlistId).then(tracks => {
-  console.log(`\nTotal Tracks: ${tracks.length}\n`);
-  console.log(tracks);
-});
